@@ -22,13 +22,13 @@ function isValidIP(input) {
 function updatePage() {
   $.get(printerUrl(printerIp,"/printer/objects/query?gcode_move&toolhead&toolchanger&quad_gantry_level&stepper_enable&axiscope"), function(data){
     // console.log(printerUrl)
-    if (data['result']) {
+    if (data?.result?.status?.toolhead && data.result.status.gcode_move && data.result.status.toolchanger) {
 
       var positions   = data['result']['status']['gcode_move']['position'];
       var gcode_pos   = data['result']['status']['gcode_move']['gcode_position'];
       var homed       = data['result']['status']['toolhead']['homed_axes'] == "xyz";
       var qgl_done    = data['result']['status']['quad_gantry_level']?.['applied'] || false;
-      var steppers    = data['result']['status']['stepper_enable']['steppers'];
+      var steppers    = data['result']['status']['stepper_enable']?.['steppers'] || {};
       // var initialized = data['result']['status']['toolchanger']['status'] == "ready";
       var tool_number = data['result']['status']['toolchanger']['tool_number'];
       var tools       = data['result']['status']['toolchanger']['tool_numbers'];
@@ -37,14 +37,19 @@ function updatePage() {
       var axis_max    = data['result']['status']['toolhead']['axis_maximum'];
       var axiscope    = data['result']['status']['axiscope'];
 
+      // Update the automatic panel before any legacy UI rendering can fail.
+      updateAutomaticCalibration(axiscope, homed, tool_number);
       updatePositions(positions, gcode_pos);
       updateHoming(homed);
       updateQGL(qgl_done);
       updateMotor(checkActiveStepper(steppers));
       updateTools(tools, tool_number);
       updateBedMap(axiscope, axis_min, axis_max, gcode_pos);
-      updateAutomaticCalibration(axiscope, homed, tool_number);
+    } else {
+      updateAutomaticCalibration(null, false, -1, 'Moonraker did not return printer status. Check that Klipper is ready.');
     }
+  }).fail(function() {
+    updateAutomaticCalibration(null, false, -1, 'Cannot read printer status from Moonraker. Check the printer connection and that Klipper is ready.');
   });
 }
 

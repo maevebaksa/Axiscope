@@ -150,3 +150,7 @@ sudo systemctl reset-failed axiscope
 sudo systemctl restart axiscope
 systemctl status axiscope --no-pager -l
 ```
+
+## Missing automatic-calibration controls
+
+The current page always displays the **Automatic SexBall XY calibration — UI 2** panel. Its status message explains a missing/old backend, an unconfigured SexBall pin, or a printer connection failure, while unavailable controls remain disabled. Update Axiscope, restart Axiscope and Klipper after checking the config, then open `http://YOUR_PRINTER:3000/?v=sexball-ui-2` to bypass an old cached page. The server also disables caching and the page uses versioned JavaScript files. If the UI 2 panel is still absent, the page is being served from an older installation or cached response.

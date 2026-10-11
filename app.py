@@ -4,6 +4,11 @@ from flask.helpers import send_from_directory
 
 app = Flask(__name__)
 
+@app.after_request
+def prevent_stale_ui(response):
+    response.headers['Cache-Control'] = 'no-store, max-age=0'
+    return response
+
 @app.route('/')
 def serve_index():
     return send_from_directory('.', 'index.html')

@@ -23,11 +23,11 @@
     >
     </script>
 
-    <script src="./js/camera.js"></script>
-    <script src="./js/index.js"></script>
-    <script src="./js/tools.js"></script>
-    <script src="./js/gcode.js"></script>
-    <script src="./js/automatic.js"></script>
+    <script src="./js/camera.js?v=sexball-ui-2"></script>
+    <script src="./js/index.js?v=sexball-ui-2"></script>
+    <script src="./js/tools.js?v=sexball-ui-2"></script>
+    <script src="./js/gcode.js?v=sexball-ui-2"></script>
+    <script src="./js/automatic.js?v=sexball-ui-2"></script>
 
     <link rel="stylesheet" href="./css/camera.css">
 
@@ -218,8 +218,8 @@
                 </div>
                 </div>
 
-                <div id="automatic-calibration" class="border border-secondary rounded p-3 mb-3" style="display:none;">
-                    <h5>Automatic SexBall XY calibration</h5>
+                <div id="automatic-calibration" class="border border-secondary rounded p-3 mb-3">
+                    <h5>Automatic SexBall XY calibration <small class="text-secondary">UI 2</small></h5>
                     <p class="small">Capture T0 at the camera once. Measure all tools, then visually confirm each nozzle before offsets are saved.</p>
                     <div class="d-flex flex-wrap gap-2 mb-2">
                         <button class="btn btn-secondary btn-sm automatic-action" id="automatic-capture" disabled>Capture T0 camera position</button>
@@ -228,7 +228,7 @@
                         <button class="btn btn-success btn-sm automatic-action" id="automatic-confirm" disabled>Alignment confirmed / next tool</button>
                         <button class="btn btn-outline-warning btn-sm automatic-action" id="automatic-abort" disabled>Discard calibration</button>
                     </div>
-                    <p id="automatic-status" class="small mb-2" aria-live="polite"></p>
+                    <p id="automatic-status" class="small mb-2" aria-live="polite">Connect to your printer to check the Axiscope backend. If this message persists, reload the page and check the printer connection.</p>
                     <p id="automatic-error" class="small text-danger" role="alert"></p>
                     <table class="table table-sm"><thead><tr><th>Tool</th><th>X offset</th><th>Y offset</th><th>Z offset</th><th>Check</th></tr></thead><tbody id="automatic-results"></tbody></table>
                 </div>

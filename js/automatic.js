@@ -16,13 +16,21 @@ function automaticCommand(script) {
         updatePage();
     });
 }
-function updateAutomaticCalibration(state, homed, activeTool) {
-    if (!state?.automatic_xy) {
-        $('#automatic-calibration').hide();
+function updateAutomaticCalibration(state, homed, activeTool, connectionError = '') {
+    $('#automatic-calibration').show();
+    if (connectionError || !state || !Object.prototype.hasOwnProperty.call(state, 'automatic_xy') || !state.automatic_xy) {
+        $('.automatic-action').prop('disabled', true);
+        const message = connectionError || (!state ?
+            'Waiting for the Axiscope Klipper backend. Check the printer connection and [axiscope] configuration.' :
+            !Object.prototype.hasOwnProperty.call(state, 'automatic_xy') ?
+            'The updated UI is loaded, but Klipper is running the old Axiscope backend. Restart Klipper after checking the module symlink and configuration.' :
+            'The backend is loaded, but the SexBall pin is missing. Configure pin: in [axiscope], then restart Klipper.');
+        $('#automatic-status').text(message);
+        $('#automatic-results').empty();
         return;
     }
-    $('#automatic-calibration').show();
-    const cameraReady = state.camera_position?.every(v => v !== null);
+    const cameraReady = Array.isArray(state.camera_position) && state.camera_position.length === 3 &&
+        state.camera_position.every(Number.isFinite);
     const checking = state.xy_state === 'awaiting_confirmation';
     const pending = ['probing', 'awaiting_confirmation', 'measured', 'saving'].includes(state.xy_state);
     $('#automatic-start').prop('disabled', automaticRequestBusy || !homed || !cameraReady || pending);
