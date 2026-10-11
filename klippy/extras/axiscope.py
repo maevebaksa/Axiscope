@@ -131,7 +131,10 @@ class Axiscope:
             'xy_state': self.xy_state,
             'xy_results': self.xy_results,
             'camera_position': self.camera_position,
+            'safe_z': self.safe_z,
             'check_tool': self.check_tool,
+            'check_position': (getattr(self, 'check_position', None)
+                               if self.check_tool is not None else None),
             'confirmed_tools': self.confirmed_tools,
             'native_config_save': True,
         }
@@ -205,12 +208,14 @@ class Axiscope:
         self._check_position([None, None, height], gcmd)
         th.manual_move([None, None, height], self.z_move_speed)
         th.wait_moves()
+        # manual_move bypasses gcode_move's cached position. Toolchanger captures
+        # that cache as its return height, so refresh it before SELECT_TOOL.
+        self.gcode_move.reset_last_position()
 
     def _move_safely(self, pos, gcmd):
         self._require_motion(gcmd)
         self._check_position(pos, gcmd)
-        if pos[2] > self.safe_z:
-            raise gcmd.error('safe_z must be at or above the target height')
+        self._check_clearance(pos, gcmd)
         self._lift(gcmd)
         th = self.printer.lookup_object('toolhead')
         th.manual_move([pos[0], pos[1], None], self.move_speed)
@@ -218,15 +223,40 @@ class Axiscope:
         th.wait_moves()
         self.gcode_move.reset_last_position()
 
+    def _check_clearance(self, pos, gcmd, label='Target'):
+        if pos[2] > self.safe_z:
+            raise gcmd.error('%s Z %.3f exceeds safe_z %.3f. Set safe_z at or '
+                             'above this height and verify it clears the entire '
+                             'travel path, then restart Klipper' %
+                             (label, pos[2], self.safe_z))
+
     def _select_tool(self, number, gcmd):
         self._lift(gcmd)
         self.cmd_AXISCOPE_BEFORE_PICKUP_GCODE(gcmd)
-        # Suppress automatic return to a previous point near the probe/camera.
-        self.gcode.run_script_from_command('SELECT_TOOL T=%d RESTORE_AXIS=' % number)
-        self.cmd_AXISCOPE_AFTER_PICKUP_GCODE(gcmd)
+        th = self.printer.lookup_object('toolhead')
+        th.wait_moves()
+        self.gcode_move.reset_last_position()
+        start_z = th.get_position()[2]
+        previous = self.toolchanger.active_tool
+        old_z_offset = self._offsets(previous)[2] if previous else None
+        # Keep KTCE's Z return after it exits the dock. Suppressing every axis
+        # leaves the carriage at dock height before the next lateral move.
+        # XY stay under the pickup/dropoff macros' control until Axiscope moves.
+        self.gcode.run_script_from_command('SELECT_TOOL T=%d RESTORE_AXIS=Z' % number)
+        th.wait_moves()
         active = self.toolchanger.active_tool
         if active is None or active.tool_number != number:
             raise gcmd.error('Physical tool selection failed for T%d' % number)
+        if old_z_offset is not None:
+            expected_z = start_z + self._offsets(active)[2] - old_z_offset
+            actual_z = th.get_position()[2]
+            if abs(actual_z - expected_z) > 0.05:
+                raise gcmd.error('T%d did not return to toolchange start Z: expected '
+                                 '%.3f, got %.3f. No calibration XY move was made; '
+                                 'check the dock-exit/Z-return macros' %
+                                 (number, expected_z, actual_z))
+        self.gcode_move.reset_last_position()
+        self.cmd_AXISCOPE_AFTER_PICKUP_GCODE(gcmd)
 
     def _locate_sexball(self, gcmd):
         th = self.printer.lookup_object('toolhead')
@@ -287,6 +317,11 @@ class Axiscope:
             tool = self._tool(number)
             if not tool or not all(hasattr(tool, 'gcode_%s_offset' % a) for a in 'xyz'):
                 raise gcmd.error('Requires KTCE or DraftShift/viesturz klipper-toolchanger tools')
+            if camera_check:
+                camera = list(self.camera_position)
+                camera[2] += self._offsets(tool)[2] - self._offsets(self._tool(0))[2]
+                self._check_position(camera, gcmd)
+                self._check_clearance(camera, gcmd, 'T%d camera' % number)
         self.xy_results = {}
         self.confirmed_tools = []
         self.check_tool = None
@@ -344,8 +379,7 @@ class Axiscope:
         if any(v is None for v in pos):
             raise gcmd.error('Use CURRENT=1 or specify X, Y and Z')
         self._check_position(pos, gcmd)
-        if pos[2] > self.safe_z:
-            raise gcmd.error('Camera height exceeds safe_z')
+        self._check_clearance(pos, gcmd, 'Camera')
         self.camera_position = pos
         gcmd.respond_info('T0 camera reference captured; calibration will save it. '
                           'AXISCOPE_SAVE_CAMERA_POSITION saves it separately')
@@ -368,6 +402,7 @@ class Axiscope:
         # measured delta, not the old offset a second time. No runtime mutation.
         pos = [self.camera_position[i] + offsets[i] - baseline[i] for i in range(3)]
         self._check_position(pos, gcmd)
+        self._check_clearance(pos, gcmd, 'T%d camera' % number)
         self._select_tool(number, gcmd)
         self._move_safely(pos, gcmd)
         self.check_tool = number

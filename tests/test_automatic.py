@@ -15,7 +15,6 @@ ROOT = Path(__file__).resolve().parents[1]
 BACKEND = Path(os.environ['AXISCOPE_TOOLCHANGER'])
 pkg = types.ModuleType('axiscope_test'); pkg.__path__ = [str(ROOT / 'klippy/extras')]
 sys.modules[pkg.__name__] = pkg
-sys.modules['axiscope_test.toolchanger'] = types.ModuleType('axiscope_test.toolchanger')
 def load(name, path):
     spec = importlib.util.spec_from_file_location(name, path)
     module = importlib.util.module_from_spec(spec)
@@ -23,6 +22,7 @@ def load(name, path):
     spec.loader.exec_module(module)
     return module
 load('axiscope_test.tools_calibrate', BACKEND / 'tools_calibrate.py')
+BackendToolchanger = load('axiscope_test.toolchanger', BACKEND / 'toolchanger.py')
 mod = load('axiscope_test.axiscope', ROOT / 'klippy/extras/axiscope.py')
 BackendTool = load('axiscope_test.tool', BACKEND / 'tool.py').Tool
 
@@ -74,7 +74,12 @@ class Gcode:
     def run_script_from_command(self, script):
         self.scripts.append(script)
         if script.startswith('SELECT_TOOL'):
-            n = int(script.split('T=')[1].split()[0]); self.printer.tc.active_tool = self.printer.tc.lookup_tool(n)
+            n = int(script.split('T=')[1].split()[0])
+            previous = self.printer.tc.active_tool
+            active = self.printer.tc.lookup_tool(n)
+            if 'RESTORE_AXIS=Z' in script and previous is not None:
+                self.printer.head.pos[2] += active.gcode_z_offset - previous.gcode_z_offset
+            self.printer.tc.active_tool = active
         if script == 'SAVE_CONFIG':
             if self.fail_save: raise RuntimeError('injected save failure')
             self.printer.config.autosave.cmd_SAVE_CONFIG(Command())
@@ -218,6 +223,110 @@ class Tests(unittest.TestCase):
         self.printer.tc.active_tool = self.printer.tools[0]
         self.a.cmd_AXISCOPE_SET_CAMERA_POSITION(Command(CURRENT=1))
         self.assertEqual(self.a.camera_position, [100., 100., 30.])
+    def test_toolchange_returns_z_using_real_backend_before_calibration_xy(self):
+        # Exercise Toolchanger.select_tool/_save_state/_restore_state_and_transform,
+        # not the simple tool-selection stub used by the probe geometry tests.
+        if not hasattr(BackendToolchanger, 'ToolGcodeTransform'):
+            self.skipTest('This docking regression exercises KTCE ToolGcodeTransform')
+        head = self.printer.head
+        tc = BackendToolchanger.Toolchanger.__new__(BackendToolchanger.Toolchanger)
+        tc.active_tool = self.printer.tools[0]
+        tc.status = BackendToolchanger.STATUS_READY
+        tc.next_change_id = 0; tc.current_change_id = -1
+        tc.has_detection = False; tc.verify_tool_pickup = False
+        tc.params = {}; tc.last_change_gcode_offset = None
+        tc.gcode_transform = BackendToolchanger.ToolGcodeTransform()
+        tc.gcode_transform.tool = tc.active_tool
+        tc.gcode_transform.next_transform = head
+        tc.ensure_homed = lambda cmd: None
+        head.move = head.manual_move
+        head.pos = [200., 210., 9., 0.]
+        origin = [10., 20., 3., 0.]
+
+        class GcodeMove:
+            def __init__(inner): inner.reset_last_position()
+            def reset_last_position(inner): inner.last = tc.gcode_transform.get_position()
+            def get_status(inner):
+                return {'gcode_position': [inner.last[i] - origin[i] for i in range(4)],
+                        'homing_origin': origin}
+            def cmd_G1(inner, cmd):
+                pos = list(inner.last)
+                for i, axis in enumerate('XYZ'):
+                    if axis in cmd.args: pos[i] = float(cmd.args[axis]) + origin[i]
+                tc.gcode_transform.move(pos, 20.)
+                inner.reset_last_position()
+
+        class Gcode:
+            def __init__(inner): inner.scripts = []; inner.saved = []
+            def create_gcode_command(inner, name, text, params): return Command(**params)
+            def respond_info(inner, message): pass
+            def error(inner, message): return RuntimeError(message)
+            def run_script_from_command(inner, script):
+                inner.scripts.append(script)
+                if script.startswith('SELECT_TOOL'):
+                    number = int(script.split('T=')[1].split()[0])
+                    restore = script.split('RESTORE_AXIS=')[1]
+                    tc.select_tool(Command(), self.printer.tc.lookup_tool(number), restore)
+                elif script.startswith('SAVE_GCODE_STATE'):
+                    inner.saved.append(tc.gcode_move.get_status())
+                elif script.startswith('RESTORE_GCODE_STATE'):
+                    tc.gcode_move.reset_last_position()
+
+        def configure(tool): tc.active_tool = tool
+        def run_macro(name, template, context):
+            if name == 'tool.dropoff_gcode':
+                head.manual_move([50., -5., 300.], 20.)
+            if name == 'tool.pickup_gcode':
+                head.manual_move([70., -5., 300.], 20.)
+                # KTCE pickup macro exits the dock in Y before returning Z.
+                head.manual_move([None, 120., None], 20.)
+                if 'Z' in context['restore_position']:
+                    head.manual_move([None, None, context['restore_position']['Z']], 20.)
+        tc._configure_toolhead_for_tool = configure
+        tc.run_gcode = run_macro
+        for tool in self.printer.tools:
+            tool.before_change_gcode = tool.dropoff_gcode = tool.pickup_gcode = tool.after_change_gcode = None
+        tc.gcode_move = GcodeMove(); tc.gcode = Gcode()
+        self.a.toolchanger = tc; self.a.gcode_move = tc.gcode_move; self.a.gcode = tc.gcode
+        self.a._select_tool(1, Command())
+        self.assertIn('SELECT_TOOL T=1 RESTORE_AXIS=Z', tc.gcode.scripts)
+        # Snapshot must use the new lift height, despite the initial cached Z9.
+        self.assertAlmostEqual(tc.gcode.saved[0]['gcode_position'][2], 30. - .1 - 3.)
+        self.assertAlmostEqual(head.pos[2], 30.7)
+        self.assertEqual(head.pos[1], 120.)
+        head.moves = []
+        self.a._move_safely([200., 210., 9.], Command())
+        self.assertEqual(head.moves[0][0], [None, None, 30.7])
+        self.assertEqual(head.moves[1][0], [200., 210., None])
+        self.assertEqual(head.moves[2][0], [None, None, 9.])
+
+    def test_incomplete_z_return_aborts_before_any_calibration_xy(self):
+        def select_without_z_return(script):
+            self.printer.tc.active_tool = self.printer.tools[2]
+            self.printer.head.pos = [70., 120., 300., 0.]
+        self.a.gcode.run_script_from_command = select_without_z_return
+        with self.assertRaisesRegex(RuntimeError, 'did not return to toolchange start Z'):
+            self.a._select_tool(1, Command())
+        self.assertTrue(all(move[0][0] is None and move[0][1] is None
+                            for move in self.printer.head.moves))
+    def test_camera_height_error_reports_actual_heights_before_motion(self):
+        self.a.safe_z = 20.
+        with self.assertRaisesRegex(RuntimeError, 'Camera Z 30.000 exceeds safe_z 20.000'):
+            self.a.cmd_AXISCOPE_SET_CAMERA_POSITION(Command(CURRENT=1))
+        self.a.camera_position[2] = 30.
+        before = list(self.printer.head.pos)
+        with self.assertRaisesRegex(RuntimeError, 'T0 camera Z 30.000 exceeds safe_z 20.000'):
+            self.calibrate()
+        self.assertEqual(self.printer.head.pos, before)
+        self.assertEqual(self.a.probe_multi_axis.calls, [])
+    def test_camera_move_checks_tool_height_before_tool_selection(self):
+        self.a.camera_position[2] = 30.
+        before = list(self.printer.head.pos)
+        active = self.printer.tc.active_tool
+        with self.assertRaisesRegex(RuntimeError, 'camera Z 30.700 exceeds safe_z 30.000'):
+            self.a.cmd_AXISCOPE_MOVE_TO_CAMERA(Command(T=2))
+        self.assertIs(self.printer.tc.active_tool, active)
+        self.assertEqual(self.printer.head.pos, before)
     def test_symlink_and_nested_include_preserved(self):
         target = self.root / 'source.cfg'; target.write_text(self.include.read_text())
         self.include.unlink(); self.include.symlink_to(target)

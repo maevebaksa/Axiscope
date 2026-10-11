@@ -115,7 +115,9 @@ AXISCOPE_SAVE_CALIBRATION
 CALIBRATE_ALL_XY_OFFSETS CAMERA_CHECK=0 SAVE=1
 ```
 
-Calibration cannot run during a printing or paused job, with unhomed axes, or with an active named bed-mesh profile. Existing T0 offsets are retained as the reference; physical tool numbers and their actual section names are read from the toolchanger, not guessed from `Tn`. Offsets are measured in raw machine coordinates to avoid double-applying the old tool offsets. Tool selection uses `SELECT_TOOL ... RESTORE_AXIS=` to prevent returning to the previous fixture position.
+Calibration cannot run during a printing or paused job, with unhomed axes, or with an active named bed-mesh profile. Existing T0 offsets are retained as the reference; physical tool numbers and their actual section names are read from the toolchanger, not guessed from `Tn`. Offsets are measured in raw machine coordinates to avoid double-applying the old tool offsets. Tool selection uses `SELECT_TOOL ... RESTORE_AXIS=Z`: KTCE completes its dock exit and Z return, without returning X/Y to the previous fixture. Raw clearance moves refresh Klipper's cached G-code position before the toolchanger captures the return height.
+
+**Upgrade before using automatic calibration if you installed an earlier version that used an empty `RESTORE_AXIS=`.** That version suppressed the Z return too and could travel laterally at dock height after pickup. The corrected version preserves the Z return. Validate your normal toolchange/dock-exit path before retrying, and verify `safe_z` clears the full transit path. Do not automatically move or rehome a tool still engaged with a dock after a collision.
 
 ## Persistence and compatibility
 
