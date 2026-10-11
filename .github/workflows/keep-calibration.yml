@@ -1,0 +1,109 @@
+name: Preserve calibration and sync upstream Axiscope
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+  schedule:
+    - cron: '43 8 * * *'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: axiscope-validation-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    outputs:
+      changed: ${{ steps.sync.outputs.changed }}
+      base: ${{ steps.sync.outputs.base }}
+      candidate: ${{ steps.sync.outputs.candidate }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - id: sync
+        name: Merge upstream without replacing fork changes
+        env:
+          SYNC_EVENT: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          base=$(git rev-parse HEAD)
+          echo "base=$base" >> "$GITHUB_OUTPUT"
+          echo 'changed=false' >> "$GITHUB_OUTPUT"
+          if [[ "$SYNC_EVENT" == schedule || "$SYNC_EVENT" == workflow_dispatch ]]; then
+            git fetch https://github.com/nic335/Axiscope.git main
+            upstream=$(git rev-parse FETCH_HEAD)
+            if ! git merge-base --is-ancestor "$upstream" HEAD; then
+              git config user.name 'github-actions[bot]'
+              git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+              # A conflict fails this job; never select an automatic winner.
+              git merge --no-edit "$upstream"
+              echo 'changed=true' >> "$GITHUB_OUTPUT"
+            fi
+          fi
+          echo "candidate=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Load toolchanger and Klipper validation dependencies
+        run: |
+          git clone --depth 1 https://github.com/jwellman80/klipper-toolchanger-easy.git "$RUNNER_TEMP/ktce"
+          git -C "$RUNNER_TEMP/ktce" fetch --depth 1 origin e881fe40949a3999b0d63f59c22df589474eae9b
+          git -C "$RUNNER_TEMP/ktce" checkout --detach FETCH_HEAD
+          git clone --depth 1 https://github.com/Klipper3d/klipper.git "$RUNNER_TEMP/klipper"
+      - name: Verify calibration, dock Z return, UI and installer
+        env:
+          AXISCOPE_TOOLCHANGER: ${{ runner.temp }}/ktce/klipper/extras
+          KLIPPER_CONFIGFILE: ${{ runner.temp }}/klipper/klippy/configfile.py
+        run: |
+          python3 -m unittest discover -s tests -q
+          python3 -m py_compile klippy/extras/axiscope.py app.py
+          node tests/test_ui.js
+          for script in js/*.js; do node --check "$script"; done
+          bash -n upgrade.sh install.sh install-patch.sh
+          git diff --check
+      - name: Bundle only the validated merge
+        if: steps.sync.outputs.changed == 'true'
+        env:
+          BASE_SHA: ${{ steps.sync.outputs.base }}
+        run: git bundle create validated.bundle HEAD "^$BASE_SHA"
+      - uses: actions/upload-artifact@v4
+        if: steps.sync.outputs.changed == 'true'
+        with:
+          name: validated-upstream-merge
+          path: validated.bundle
+          retention-days: 3
+
+  publish:
+    needs: validate
+    if: needs.validate.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          name: validated-upstream-merge
+      - name: Advance main only if it still matches the validated base
+        env:
+          BASE_SHA: ${{ needs.validate.outputs.base }}
+          CANDIDATE_SHA: ${{ needs.validate.outputs.candidate }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$BASE_SHA"
+          git bundle verify validated.bundle
+          git fetch ./validated.bundle HEAD
+          test "$(git rev-parse FETCH_HEAD)" = "$CANDIDATE_SHA"
+          git merge-base --is-ancestor "$BASE_SHA" "$CANDIDATE_SHA"
+          git push origin "$CANDIDATE_SHA:refs/heads/main"
