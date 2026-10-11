@@ -71,7 +71,7 @@ AXISCOPE_QUERY_PROBE
 
 It should report `open`. Hold the ball down and repeat; it must report `TRIGGERED`. The patch rejects an already-triggered switch and bounds the downward search. Clean the nozzles and use the same controlled temperature for all tools when measuring. Retain your existing safe nozzle-cleaning/heating hooks as needed. For KTCE with TAP crash detection, retain your existing `STOP_CRASH_DETECTION` calibration hook after pickup, **only if that command exists in your configuration**; this patch does not change your crash-detection policy.
 
-With Y353.703125 and `spread: 7`, the approach envelope reaches Y360.703125. Your configured Y travel and actual mechanism must permit that. If they do not, reposition the fixture or verify an appropriate smaller spread; do not extend travel limits beyond the mechanism. The patch checks the envelope before calibration motion.
+The example uses your supplied X52.600, Y-9.700, Z9.900 and tentative `pin: ^!PC0`. Verify the pin state with the commands above. With `spread: 7`, the approach envelope spans X45.600–59.600 and Y-16.700–-2.700. Your configured travel and actual mechanism must permit that. If they do not, reposition the fixture or verify an appropriate smaller spread; do not extend travel limits beyond the mechanism. The patch checks the envelope before calibration motion. Z9.900 must be above the ball; if it is a contact position, raise the starting Z before running.
 
 ## Capture the camera independently
 
