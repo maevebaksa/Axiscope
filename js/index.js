@@ -27,7 +27,7 @@ function updatePage() {
       var positions   = data['result']['status']['gcode_move']['position'];
       var gcode_pos   = data['result']['status']['gcode_move']['gcode_position'];
       var homed       = data['result']['status']['toolhead']['homed_axes'] == "xyz";
-      var qgl_done    = data['result']['status']['quad_gantry_level']['applied'];
+      var qgl_done    = data['result']['status']['quad_gantry_level']?.['applied'] || false;
       var steppers    = data['result']['status']['stepper_enable']['steppers'];
       // var initialized = data['result']['status']['toolchanger']['status'] == "ready";
       var tool_number = data['result']['status']['toolchanger']['tool_number'];
@@ -43,6 +43,7 @@ function updatePage() {
       updateMotor(checkActiveStepper(steppers));
       updateTools(tools, tool_number);
       updateBedMap(axiscope, axis_min, axis_max, gcode_pos);
+      updateAutomaticCalibration(axiscope, homed, tool_number);
     }
   });
 }

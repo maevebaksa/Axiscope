@@ -1,5 +1,7 @@
 # Axiscope
 
+Automatic SexBall XY/XYZ calibration with separate camera confirmation is documented in [INSTALL-SEXBALL.md](INSTALL-SEXBALL.md). Use that installer for this patch.
+
 ## What is Axiscope?
 
 Axiscope is a specialized tool designed to simplify the XY calibration process for multi-tool 3D printers running Klipper Tool Changer Plugin using camera-assisted alignment. It provides a streamlined interface for:
@@ -48,15 +50,11 @@ If you want to use automatic Z calibration:
 Quick installation using curl:
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/nic335/Axiscope/refs/heads/main/install.sh | bash
+curl -sSL https://raw.githubusercontent.com/maevebaksa/Axiscope/main/upgrade.sh -o /tmp/axiscope-upgrade.sh
+bash /tmp/axiscope-upgrade.sh
 ```
 
-The install script will:
-
-- Create Python virtual environment
-- Install required dependencies
-- Set up the systemd service
-- Configure Moonraker integration
+The installer detects an existing Axiscope installation, backs it up, installs this fork, and replaces the existing Moonraker update-manager block (including blocks in included files). It sets up the Python environment and systemd service. See [INSTALL-SEXBALL.md](INSTALL-SEXBALL.md) before restarting Klipper or calibrating.
 
 ### Starting Axiscope
 
