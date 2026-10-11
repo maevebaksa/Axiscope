@@ -99,7 +99,8 @@ class Axiscope:
         for name in ('CALIBRATE_ALL_XY_OFFSETS', 'AXISCOPE_SET_CAMERA_POSITION',
                      'AXISCOPE_MOVE_TO_CAMERA', 'AXISCOPE_CONFIRM_TOOL',
                      'AXISCOPE_SAVE_CALIBRATION', 'AXISCOPE_ABORT_CALIBRATION',
-                     'AXISCOPE_QUERY_PROBE', 'AXISCOPE_SAVE_CAMERA_POSITION'):
+                     'AXISCOPE_QUERY_PROBE', 'AXISCOPE_SAVE_CAMERA_POSITION',
+                     'AXISCOPE_ADJUST_CAMERA'):
             self.gcode.register_command(name, getattr(self, 'cmd_' + name))
 
     def handle_connect(self):
@@ -122,20 +123,23 @@ class Axiscope:
 
     def get_status(self, eventtime):
         return {
-            'probe_results':   self.probe_results,
+            'probe_results':   copy.deepcopy(self.probe_results),
             'can_save_config': self.has_cfg_data is not False,
             'endstop_x':       self.x_pos,
             'endstop_y':       self.y_pos,
             'endstop_z':       self.z_pos,
             'automatic_xy': self.probe_multi_axis is not None,
             'xy_state': self.xy_state,
-            'xy_results': self.xy_results,
-            'camera_position': self.camera_position,
+            'xy_results': copy.deepcopy(self.xy_results),
+            'camera_position': list(self.camera_position),
             'safe_z': self.safe_z,
             'check_tool': self.check_tool,
-            'check_position': (getattr(self, 'check_position', None)
+            'check_position': (copy.copy(getattr(self, 'check_position', None))
                                if self.check_tool is not None else None),
-            'confirmed_tools': self.confirmed_tools,
+            'confirmed_tools': list(self.confirmed_tools),
+            'confirmation_ready': self._verification_error() is None,
+            'confirmation_blocked': self._verification_error(),
+            'camera_adjustment': True,
             'native_config_save': True,
         }
         
@@ -412,16 +416,58 @@ class Axiscope:
     def cmd_AXISCOPE_MOVE_TO_CAMERA(self, gcmd):
         self._show_camera(gcmd.get_int('T', 0, minval=0), gcmd)
 
-    def cmd_AXISCOPE_CONFIRM_TOOL(self, gcmd):
-        self._require_motion(gcmd)
+    def _verification_error(self):
         if self.xy_state != 'awaiting_confirmation' or self.check_tool is None:
-            raise gcmd.error('No camera verification in progress')
+            return 'no_check'
         active = self.toolchanger.active_tool
         if active is None or active.tool_number != self.check_tool:
-            raise gcmd.error('Return to the verification tool with AXISCOPE_MOVE_TO_CAMERA')
+            return 'wrong_tool'
         current = self.printer.lookup_object('toolhead').get_position()
         if any(abs(current[i] - self.check_position[i]) > 0.05 for i in range(3)):
-            raise gcmd.error('Nozzle moved; return with AXISCOPE_MOVE_TO_CAMERA before confirming')
+            return 'position_changed'
+        return None
+
+    def _require_verification(self, gcmd):
+        self._require_motion(gcmd)
+        error = self._verification_error()
+        if error:
+            raise gcmd.error({
+                'no_check': 'No camera verification in progress',
+                'wrong_tool': 'Return to the verification tool with AXISCOPE_MOVE_TO_CAMERA',
+                'position_changed': 'Nozzle moved; return with AXISCOPE_MOVE_TO_CAMERA before confirming',
+            }[error])
+
+    def cmd_AXISCOPE_ADJUST_CAMERA(self, gcmd):
+        self._require_verification(gcmd)
+        number = self.check_tool
+        if number == 0:
+            raise gcmd.error('T0 is the reference; abort and recapture T0 instead of trimming it')
+        if number in self.confirmed_tools:
+            raise gcmd.error('Cannot adjust an already confirmed tool')
+        delta = [gcmd.get_float(axis, 0.) for axis in ('X', 'Y')]
+        if any(not math.isfinite(v) or abs(v) > 1. for v in delta):
+            raise gcmd.error('Camera adjustment must be finite and at most 1 mm per axis')
+        result = self.xy_results[str(number)]
+        offsets = list(result['offsets'])
+        position = list(self.check_position)
+        baseline = self.xy_results['0']['offsets']
+        for i in range(2):
+            offsets[i] += delta[i]
+            position[i] += delta[i]
+            if abs(offsets[i] - baseline[i]) > self.max_offset:
+                raise gcmd.error('Camera-adjusted offset exceeds max_offset')
+        # Commit the pending correction only after the bounded camera move succeeds.
+        # Runtime tool offsets and config remain untouched until final confirmation.
+        self._move_safely(position, gcmd)
+        result['offsets'] = offsets
+        result['camera_adjustment'] = [offsets[i] - baseline[i] -
+            (result['position'][i] - self.xy_results['0']['position'][i]) for i in range(2)]
+        self.check_position = position
+        gcmd.respond_info('T%d pending camera correction: X=%.6f Y=%.6f; visually recheck before confirming' %
+                          (number, *result['camera_adjustment']))
+
+    def cmd_AXISCOPE_CONFIRM_TOOL(self, gcmd):
+        self._require_verification(gcmd)
         number = self.check_tool
         if number not in self.confirmed_tools:
             self.confirmed_tools.append(number)

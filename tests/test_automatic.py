@@ -132,6 +132,7 @@ class Tests(unittest.TestCase):
         a.max_z_travel = 10.; a.max_offset = 5.
         a.camera_position = [100., 110., 10.]; a.xy_results = {}; a.xy_state = 'idle'
         a.confirmed_tools = []; a.check_tool = None; a.xy_include_z = False; a.xy_save = True
+        a.probe_results = {}; a.has_cfg_data = False
         a.cmd_AXISCOPE_START_GCODE = lambda cmd: None
         a.cmd_AXISCOPE_FINISH_GCODE = lambda cmd: None
         a.cmd_AXISCOPE_BEFORE_PICKUP_GCODE = lambda cmd: None
@@ -205,6 +206,82 @@ class Tests(unittest.TestCase):
         self.printer.tc.active_tool = self.printer.tools[0]; self.printer.head.pos[0] += 1
         with self.assertRaisesRegex(RuntimeError, 'Nozzle moved'): self.a.cmd_AXISCOPE_CONFIRM_TOOL(Command())
         self.assertEqual(self.a.confirmed_tools, [])
+    def test_status_restores_pending_check_without_mutating_previous_snapshot(self):
+        self.calibrate(SAVE=0)
+        before = self.a.get_status(0.)
+        self.assertTrue(before['confirmation_ready'])
+        self.assertEqual(before['check_tool'], 0)
+        self.a.cmd_AXISCOPE_CONFIRM_TOOL(Command())
+        after = self.a.get_status(1.)
+        self.assertEqual(after['confirmed_tools'], [0])
+        self.assertEqual(before['confirmed_tools'], [])
+        self.assertTrue(after['confirmation_ready'])
+        self.printer.head.pos[0] += 0.4
+        moved = self.a.get_status(2.)
+        self.assertFalse(moved['confirmation_ready'])
+        self.assertEqual(moved['confirmation_blocked'], 'position_changed')
+        self.a.cmd_AXISCOPE_MOVE_TO_CAMERA(Command(T=2))
+        self.assertTrue(self.a.get_status(3.)['confirmation_ready'])
+
+    def test_camera_trim_changes_only_pending_tool_xy_until_final_save(self):
+        self.calibrate()
+        self.a.cmd_AXISCOPE_CONFIRM_TOOL(Command())
+        before = self.a.get_status(0.)
+        original = self.include.read_text()
+        old_z = self.a.xy_results['2']['offsets'][2]
+        self.a.cmd_AXISCOPE_ADJUST_CAMERA(Command(X=.4, Y=-.05))
+        result = self.a.xy_results['2']
+        self.assertAlmostEqual(result['offsets'][0], 1.5)
+        self.assertAlmostEqual(result['offsets'][1], -1.05)
+        self.assertEqual(result['offsets'][2], old_z)
+        self.assertAlmostEqual(self.printer.head.pos[0], 101.)
+        self.assertAlmostEqual(self.printer.head.pos[1], 109.15)
+        self.assertEqual(self.include.read_text(), original)
+        self.assertEqual(self.a.confirmed_tools, [0])
+        self.assertEqual(self.printer.tools[1].gcode_x_offset, 4.)
+        self.assertAlmostEqual(before['xy_results']['2']['offsets'][0], 1.1)
+        self.a.cmd_AXISCOPE_MOVE_TO_CAMERA(Command(T=2))
+        self.assertAlmostEqual(self.printer.head.pos[0], 101.)
+        self.a.cmd_AXISCOPE_CONFIRM_TOOL(Command())
+        self.a.cmd_AXISCOPE_CONFIRM_TOOL(Command())
+        self.assertEqual(self.printer.config.autosave.fileconfig.get('tool physical_2', 'gcode_x_offset'), '1.500000')
+        self.assertTrue(self.printer.gcode.restarted)
+
+    def test_camera_trim_requires_current_unconfirmed_nonreference_tool(self):
+        self.calibrate(SAVE=0)
+        with self.assertRaisesRegex(RuntimeError, 'T0 is the reference'):
+            self.a.cmd_AXISCOPE_ADJUST_CAMERA(Command(X=.05))
+        self.a.cmd_AXISCOPE_CONFIRM_TOOL(Command())
+        self.printer.head.pos[0] += .4
+        with self.assertRaisesRegex(RuntimeError, 'Nozzle moved'):
+            self.a.cmd_AXISCOPE_ADJUST_CAMERA(Command(X=.05))
+        self.a.cmd_AXISCOPE_MOVE_TO_CAMERA(Command(T=2))
+        self.printer.tc.active_tool = self.printer.tools[0]
+        with self.assertRaisesRegex(RuntimeError, 'verification tool'):
+            self.a.cmd_AXISCOPE_ADJUST_CAMERA(Command(X=.05))
+        self.printer.tc.active_tool = self.printer.tools[1]
+        self.a.confirmed_tools.append(2)
+        with self.assertRaisesRegex(RuntimeError, 'already confirmed'):
+            self.a.cmd_AXISCOPE_ADJUST_CAMERA(Command(X=.05))
+
+    def test_camera_trim_bounds_and_failed_move_leave_results_unchanged(self):
+        self.calibrate(SAVE=0)
+        self.a.cmd_AXISCOPE_CONFIRM_TOOL(Command())
+        original = list(self.a.xy_results['2']['offsets'])
+        moves = len(self.printer.head.moves)
+        for value in [float('nan'), float('inf'), 1.1, -1.1]:
+            with self.assertRaisesRegex(RuntimeError, 'at most 1 mm'):
+                self.a.cmd_AXISCOPE_ADJUST_CAMERA(Command(X=value))
+        self.a.max_offset = .8
+        with self.assertRaisesRegex(RuntimeError, 'max_offset'):
+            self.a.cmd_AXISCOPE_ADJUST_CAMERA(Command(X=.4))
+        self.assertEqual(len(self.printer.head.moves), moves)
+        self.a.max_offset = 5.
+        self.a._move_safely = lambda pos, cmd: (_ for _ in ()).throw(RuntimeError('move failed'))
+        with self.assertRaisesRegex(RuntimeError, 'move failed'):
+            self.a.cmd_AXISCOPE_ADJUST_CAMERA(Command(X=.4))
+        self.assertEqual(self.a.xy_results['2']['offsets'], original)
+
     def test_stale_offsets_cannot_save(self):
         self.calibrate(SAVE=0, CAMERA_CHECK=0)
         self.printer.tools[1].gcode_x_offset = 2.

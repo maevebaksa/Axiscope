@@ -156,3 +156,31 @@ systemctl status axiscope --no-pager -l
 ## Missing automatic-calibration controls
 
 The current page always displays the **Automatic SexBall XY calibration — UI 2** panel. Its status message explains a missing/old backend, an unconfigured SexBall pin, or a printer connection failure, while unavailable controls remain disabled. Update Axiscope, restart Axiscope and Klipper after checking the config, then open `http://YOUR_PRINTER:3000/?v=sexball-ui-2` to bypass an old cached page. The server also disables caching and the page uses versioned JavaScript files. If the UI 2 panel is still absent, the page is being served from an older installation or cached response.
+
+
+### Refreshing and correcting the camera check
+
+Browser refresh does not discard pending measurements or confirmed tools. The
+native Mainsail page now queries the full calibration/tool/position status on
+load, reconnect and after every command. It remembers the selected camera in
+Mainsail's printer GUI settings. If confirmation is unavailable, read the hint;
+use **Refresh calibration status** for a read-only retry. If the tool or position
+changed, use **Move Tn to camera** and visually recheck before confirming.
+Restarting Klipper discards unsaved calibration, unlike refreshing the browser.
+
+For a nonreference tool with a visible residual, the updated backend supports
+`AXISCOPE_ADJUST_CAMERA X=0.05 Y=0` (relative printer-axis millimeters).
+Mainsail supplies X/Y ±0.05 mm buttons during that tool's camera check.
+Each command moves the nozzle using the existing safe transit path, changes
+only that tool's pending XY offsets and requires another visual check.
+The final confirmation saves those corrected offsets with the other tools;
+Z and live tool offsets are unchanged until the native config save/restart.
+A per-command correction above 1 mm, an accumulated offset outside `max_offset`,
+the wrong tool, a moved nozzle, T0, or an already confirmed tool is rejected.
+To correct T0, discard the calibration and capture a new T0 camera reference.
+
+These controls are manual camera corrections, not automatic image measurement.
+A consistent residual can come from probe contact/nozzle geometry, pickup
+repeatability, camera inspection height, or measurement error. Record tool
+numbers, signed X/Y displacement and repeat measurements before attributing it
+to any one cause. Do not confirm a tool that is visibly misaligned.
