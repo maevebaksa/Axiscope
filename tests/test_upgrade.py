@@ -3,6 +3,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -81,6 +82,27 @@ class ManagerTests(unittest.TestCase):
         subprocess.run(['python3', str(ROOT / 'scripts/moonraker_axiscope.py'), 'restore', '--config', str(self.config),
                         '--manifest', str(manifest)], check=True, capture_output=True)
         self.assertEqual(self.config.read_text(), original)
+
+class ServiceUnitTests(unittest.TestCase):
+    @unittest.skipUnless(shutil.which('systemd-analyze'), 'systemd-analyze unavailable')
+    def test_generated_unit_passes_actual_systemd_validation(self):
+        script = (ROOT / 'upgrade.sh').read_text()
+        marker = '  python3 - "$install_dir" "$(id -un)" "$staging/axiscope.service" <<\'PY\'\n'
+        generator = script.split(marker)[1].split('\nPY\n')[0]
+        with tempfile.TemporaryDirectory() as directory:
+            for name in ('normal', 'has spaces', 'has%specifier'):
+                with self.subTest(name=name):
+                    install = Path(directory) / name
+                    (install / 'axiscope-env/bin').mkdir(parents=True)
+                    (install / 'axiscope-env/bin/python3').symlink_to(sys.executable)
+                    (install / 'app.py').write_text('')
+                    unit = install / 'axiscope.service'
+                    subprocess.run([sys.executable, '-', str(install), 'root', str(unit)],
+                                   input=generator, text=True, check=True)
+                    result = subprocess.run(['systemd-analyze', 'verify', str(unit)],
+                                            text=True, capture_output=True)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+
 
 class InstallerTests(unittest.TestCase):
     def setUp(self):

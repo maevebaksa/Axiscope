@@ -137,3 +137,16 @@ Add `KLIPPER_CONFIGFILE=/path/to/klipper/klippy/configfile.py` to test actual na
 ## Source
 
 Published fork: [maevebaksa/Axiscope](https://github.com/maevebaksa/Axiscope), branch `main`. The upstream project remains `nic335/Axiscope`.
+
+## Repair an already-installed service from the initial upgrade
+
+The initial generator incorrectly quoted `WorkingDirectory`, which systemd interpreted as a nonabsolute path. This is corrected in the current installer. To repair the existing unit without reinstalling:
+
+```bash
+sudo cp -a /etc/systemd/system/axiscope.service "/etc/systemd/system/axiscope.service.backup-$(date +%Y%m%d-%H%M%S)"
+sudo sed -i -E 's/^WorkingDirectory="(.*)"$/WorkingDirectory=\1/' /etc/systemd/system/axiscope.service
+sudo systemctl daemon-reload
+sudo systemctl reset-failed axiscope
+sudo systemctl restart axiscope
+systemctl status axiscope --no-pager -l
+```

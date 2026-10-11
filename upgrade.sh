@@ -130,11 +130,14 @@ if [[ "$no_services" -eq 0 ]]; then
 from pathlib import Path
 import sys
 path, user, output = sys.argv[1:]
-def quote(value): return '"' + value.replace('\\', '\\\\').replace('"', '\\"') + '"'
+def quote(value): return '"' + value.replace('%', '%%').replace('\\', '\\\\').replace('"', '\\"') + '"'
 Path(output).write_text('[Unit]\nDescription=Axiscope tool alignment\nAfter=network.target moonraker.service\n\n'
     '[Service]\nType=simple\nUser=%s\nWorkingDirectory=%s\nExecStart=%s %s\nRestart=always\nRestartSec=2\n\n'
-    '[Install]\nWantedBy=multi-user.target\n' % (user, quote(path), quote(path + '/axiscope-env/bin/python3'), quote(path + '/app.py')))
+    '[Install]\nWantedBy=multi-user.target\n' % (user, path.replace('%', '%%'), quote(path + '/axiscope-env/bin/python3'), quote(path + '/app.py')))
 PY
+  if command -v systemd-analyze >/dev/null 2>&1; then
+    systemd-analyze verify "$staging/axiscope.service"
+  fi
   service_changed=1
   sudo cp "$staging/axiscope.service" /etc/systemd/system/axiscope.service
   sudo systemctl daemon-reload
